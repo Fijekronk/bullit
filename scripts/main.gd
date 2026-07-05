@@ -29,6 +29,8 @@ func _ready() -> void:
 	chase_camera.params = skating_params
 	chase_camera.target = player
 	tuning_panel.setup(skating_params)
+	# Мышь не должна выпадать за окно при финтах.
+	Input.mouse_mode = Input.MOUSE_MODE_CONFINED
 
 
 func _physics_process(_delta: float) -> void:
@@ -38,6 +40,9 @@ func _physics_process(_delta: float) -> void:
 		_push_puck_random()
 	if Input.is_action_just_pressed("debug_shoot"):
 		_shoot_at_nearest_goal()
+	if Input.is_action_just_pressed("toggle_handedness"):
+		skating_params.handedness_right = not skating_params.handedness_right
+		tuning_panel.refresh_values()
 
 	if _respawn_ticks > 0:
 		_respawn_ticks -= 1

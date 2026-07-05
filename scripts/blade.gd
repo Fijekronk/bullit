@@ -24,6 +24,10 @@ const WALL_MARGIN := 0.18
 
 const COLOR_IDLE := Color(0.12, 0.12, 0.14)
 const COLOR_ASSIST := Color(0.2, 0.85, 0.35)
+const COLOR_CATCH := Color(0.2, 0.65, 1.0)
+# Горизонт предсказания траектории шайбы. Короткий — приём включается,
+# когда контакт неминуем (несколько тиков), а не глушит шайбу за метры.
+const CATCH_LOOKAHEAD := 0.08
 
 ## Для автотестов: конечная точка вместо курсора мыши (Vector3.INF = мышь).
 var cursor_override := Vector3.INF
@@ -32,6 +36,7 @@ var blade_velocity := Vector3.ZERO
 var target_point := Vector3.ZERO
 var cursor_point := Vector3.ZERO
 var assist_active := false
+var catch_active := false
 var rel_speed := 0.0
 
 var _player: CharacterBody3D
@@ -105,14 +110,14 @@ func _physics_process(delta: float) -> void:
 
 	_update_cursor()
 
-	# Цель крюка: курсор, зажатый в кольцо досягаемости вокруг игрока,
+	# Цель крюка: курсор, зажатый в асимметричную зону досягаемости
+	# (сектор форхенда/бэкхенда вокруг facing, зеркалится по хвату),
 	# со слабым экспоненциальным сглаживанием против дрожи руки.
 	var offset := cursor_point - anchor
 	offset.y = 0.0
 	var raw_target := target_point
 	if offset.length() > 0.001:
-		raw_target = anchor + offset.normalized() \
-				* clampf(offset.length(), params.stick_min_reach, params.stick_max_reach)
+		raw_target = anchor + _clamp_to_zone(offset, params)
 	target_point = target_point.lerp(raw_target, 1.0 - exp(-params.stick_smoothing * delta))
 
 	# Движение к цели: скорость и ускорение ограничены — резкий рывок мыши
@@ -183,10 +188,66 @@ func _update_cursor() -> void:
 		cursor_point = origin + normal * t
 
 
+## Азимутальная зона досягаемости. Координата e — угол от "прямо вперёд"
+## по facing игрока, положительное направление — сторона хвата.
+## Форхенд: e in [0, forehand_arc], полный радиус. Бэкхенд: e in
+## [-backhand_arc, 0], радиус плавно падает до backhand_reach. Остальное —
+## запретная зона: азимут зажимается к ближайшему краю.
+func _clamp_to_zone(offset: Vector3, params: SkatingParams) -> Vector3:
+	var forward := -_player.global_transform.basis.z
+	forward.y = 0.0
+	forward = forward.normalized()
+	var dist := offset.length()
+	var hand_sign := -1.0 if params.handedness_right else 1.0  # e>0 — сторона хвата
+	var e := rad_to_deg(forward.signed_angle_to(offset / dist, Vector3.UP)) * hand_sign
+
+	var fa: float = params.forehand_arc
+	var ba: float = params.backhand_arc
+	var covered := (e >= 0.0 and e <= fa) or (e < 0.0 and e >= -ba) \
+			or (fa > 180.0 and e <= fa - 360.0)
+	if not covered:
+		# Запретная зона: к ближайшему краю по дуге.
+		var fa_edge := fa if fa <= 180.0 else fa - 360.0
+		var to_fore := absf(wrapf(e - fa_edge, -180.0, 180.0))
+		var to_back := absf(wrapf(e + ba, -180.0, 180.0))
+		e = fa_edge if to_fore < to_back else -ba
+	var reach := zone_reach(e, params)
+	var azimuth := deg_to_rad(e * hand_sign)  # обратно в мировой знак
+	return forward.rotated(Vector3.UP, azimuth) * clampf(dist, params.stick_min_reach, reach)
+
+
+## Радиус зоны на азимуте e (в "хватовых" градусах, e уже в покрытом секторе).
+func zone_reach(e: float, params: SkatingParams) -> float:
+	if e >= 0.0 or e <= -params.backhand_arc:
+		return params.stick_max_reach
+	var t: float = absf(e) / params.backhand_arc
+	return lerpf(params.stick_max_reach, params.backhand_reach, smoothstep(0.0, 1.0, t))
+
+
+## Контур зоны для F2-отрисовки (мировые точки на льду).
+func zone_outline(steps := 48) -> PackedVector3Array:
+	var points := PackedVector3Array()
+	var params: SkatingParams = _player.params
+	var forward := -_player.global_transform.basis.z
+	forward.y = 0.0
+	forward = forward.normalized()
+	var hand_sign := -1.0 if params.handedness_right else 1.0
+	var anchor := _player.global_position
+	anchor.y = 0.04
+	for i in steps + 1:
+		var e := lerpf(-params.backhand_arc, params.forehand_arc, float(i) / steps)
+		var dir := forward.rotated(Vector3.UP, deg_to_rad(e * hand_sign))
+		points.append(anchor + dir * zone_reach(e, params))
+	return points
+
+
 func _apply_assist(params: SkatingParams) -> void:
 	# "Мягкие руки": при близком и медленном (относительно крюка) контакте
-	# демпфируем относительную скорость силой. Быстрый контакт — чистый удар.
+	# демпфируем относительную скорость силой (никогда позицию). Плюс режим
+	# автоприёма: сближающаяся шайба, чья траектория проходит рядом с крюком,
+	# гасится сильнее. Быстрый рывок крюком (флик) не душим — там чистый удар.
 	assist_active = false
+	catch_active = false
 	rel_speed = 0.0
 	var puck := get_tree().get_first_node_in_group("puck") as RigidBody3D
 	if puck == null:
@@ -196,12 +257,31 @@ func _apply_assist(params: SkatingParams) -> void:
 	rel_speed = rel.length()
 	var to_puck := puck.global_position - global_position
 	to_puck.y = 0.0
-	if to_puck.length() > params.assist_radius or rel_speed > params.assist_max_rel_speed:
+
+	# Штатная помощь ведению.
+	if to_puck.length() <= params.assist_radius and rel_speed <= params.assist_max_rel_speed:
+		assist_active = true
+		_apply_damping_force(puck, rel, params.assist_strength, params.assist_max_force)
 		return
-	assist_active = true
-	var force := -params.assist_strength * rel
-	if force.length() > params.assist_max_force:
-		force = force.normalized() * params.assist_max_force
+
+	# Автоприём: только когда шайба СБЛИЖАЕТСЯ (флики не душим).
+	if rel_speed < 0.01 or rel_speed > params.catch_max_rel_speed:
+		return
+	if rel.dot(to_puck) >= 0.0:
+		return  # удаляется
+	# Ближайшая точка предсказанной траектории шайбы относительно крюка.
+	var t_close := clampf(-to_puck.dot(rel) / (rel_speed * rel_speed), 0.0, CATCH_LOOKAHEAD)
+	var closest := (to_puck + rel * t_close).length()
+	if closest > params.catch_radius:
+		return
+	catch_active = true
+	_apply_damping_force(puck, rel, params.catch_strength, params.catch_max_force)
+
+
+func _apply_damping_force(puck: RigidBody3D, rel: Vector3, strength: float, max_force: float) -> void:
+	var force := -strength * rel
+	if force.length() > max_force:
+		force = force.normalized() * max_force
 	puck.apply_central_force(force)
 
 
@@ -222,8 +302,10 @@ func _clamp_to_rink(p: Vector3) -> Vector3:
 
 
 func _update_visuals(anchor: Vector3) -> void:
-	# Индикация активной помощи — только при включённой F2-визуализации.
-	if _debug_viz.visible and assist_active:
+	# Индикация помощи/приёма — только при включённой F2-визуализации.
+	if _debug_viz.visible and catch_active:
+		_blade_material.albedo_color = COLOR_CATCH
+	elif _debug_viz.visible and assist_active:
 		_blade_material.albedo_color = COLOR_ASSIST
 	else:
 		_blade_material.albedo_color = COLOR_IDLE

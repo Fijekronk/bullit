@@ -60,6 +60,13 @@ func _build_ui() -> void:
 		name_label.custom_minimum_size = Vector2(230, 0)
 		row.add_child(name_label)
 
+		if def.get("type", "") == "toggle":
+			var check := CheckButton.new()
+			check.toggled.connect(_on_toggle_changed.bind(def.key))
+			row.add_child(check)
+			_rows[def.key] = {"toggle": check}
+			continue
+
 		var slider := HSlider.new()
 		slider.min_value = def.min
 		slider.max_value = def.max
@@ -96,10 +103,17 @@ func _build_ui() -> void:
 	buttons.add_child(reset_button)
 
 
+func refresh_values() -> void:
+	_refresh_all()
+
+
 func _refresh_all() -> void:
 	if params == null:
 		return
 	for def in SkatingParams.PARAM_DEFS:
+		if def.get("type", "") == "toggle":
+			_rows[def.key].toggle.set_pressed_no_signal(bool(params.get(def.key)))
+			continue
 		var value: float = params.get(def.key)
 		_rows[def.key].slider.set_value_no_signal(value)
 		_rows[def.key].value.text = _format_value(value)
@@ -109,6 +123,11 @@ func _on_slider_changed(value: float, key: String) -> void:
 	if params:
 		params.set(key, value)
 	_rows[key].value.text = _format_value(value)
+
+
+func _on_toggle_changed(pressed: bool, key: String) -> void:
+	if params:
+		params.set(key, pressed)
 
 
 func _format_value(value: float) -> String:

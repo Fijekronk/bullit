@@ -12,6 +12,7 @@ const COLOR_VELOCITY := Color(0.25, 1.0, 0.35)
 const COLOR_FACING := Color(1.0, 0.25, 0.2)
 const COLOR_TRAIL := Color(1.0, 0.9, 0.35)
 const COLOR_BLADE_TARGET := Color(0.3, 0.8, 1.0)
+const COLOR_ZONE := Color(0.55, 0.75, 1.0, 0.45)
 
 var _player: CharacterBody3D
 var _mesh: ImmediateMesh
@@ -31,6 +32,7 @@ func _ready() -> void:
 	var material := StandardMaterial3D.new()
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.vertex_color_use_as_albedo = true
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mesh_instance.material_override = material
 	mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mesh_instance)
@@ -86,6 +88,23 @@ func _physics_process(_delta: float) -> void:
 		_mesh.surface_add_vertex(blade.global_position)
 		_mesh.surface_set_color(COLOR_BLADE_TARGET)
 		_mesh.surface_add_vertex(blade.target_point + Vector3(0.0, 0.05, 0.0))
+
+	# Контур зоны досягаемости клюшки (следует за facing и хватом).
+	if blade:
+		var outline: PackedVector3Array = blade.zone_outline()
+		var anchor := _player.global_position
+		anchor.y = 0.04
+		for i in outline.size() - 1:
+			_mesh.surface_set_color(COLOR_ZONE)
+			_mesh.surface_add_vertex(outline[i])
+			_mesh.surface_set_color(COLOR_ZONE)
+			_mesh.surface_add_vertex(outline[i + 1])
+		# Замыкание через центр: границы запретного сектора.
+		for edge_point in [outline[0], outline[outline.size() - 1]]:
+			_mesh.surface_set_color(COLOR_ZONE)
+			_mesh.surface_add_vertex(anchor)
+			_mesh.surface_set_color(COLOR_ZONE)
+			_mesh.surface_add_vertex(edge_point)
 	_mesh.surface_end()
 
 	_label.global_position = pos + Vector3(0.0, 2.3, 0.0)

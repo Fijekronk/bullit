@@ -1,16 +1,20 @@
 class_name Player
 extends CharacterBody3D
-## Контроллер конька. Ключевая идея: направление корпуса (facing = rotation.y)
-## и вектор скорости раздельны; сцепление (grip) каждый тик доворачивает
-## velocity к корпусу — отсюда проскальзывание в дугах.
-## W — толчки вперёд, A/D — поворот корпуса, S — торможение / езда назад.
+## Контроллер конька, модель "направление" (этап 3.5): WASD задаёт желаемое
+## направление движения относительно yaw камеры, а не газ/руль.
+## По углу между velocity и wish_dir: резаная дуга (carve) / крутая дуга /
+## авто-пивот (юз → разворот → толчок). S — тормоз до полной остановки.
+## Корпус (facing) имеет и лимит угловой скорости, и лимит углового
+## ускорения — волчок и мгновенные развороты невозможны.
 
-const HOCKEY_STOP_MIN_SPEED := 5.0  # м/с: S выше этой скорости — хоккейный стоп
+const LOW_SPEED := 3.0             # ниже — режим "пятачка": быстрый доворот
+const HOCKEY_STOP_MIN_SPEED := 5.0
 const HOCKEY_STOP_BRAKE_MULT := 1.5
-const HOCKEY_STOP_TURN_MULT := 0.6  # доля turn_rate_at_zero для доворота корпуса в юзе
-const BACKWARD_ACCEL_RATIO := 0.5
+const HOCKEY_STOP_TURN_MULT := 0.6  # доля turn_rate_at_zero в юзе/пивоте
+const HARD_TURN_RATE_MULT := 1.6    # крутая дуга: корпус доворачивается быстрее
 const CROSSOVER_MIN_SPEED := 4.0
-const STRIDE_FREQ := 1.7  # Гц: пульсация тяги — "толчки", а не машина
+const CROSSOVER_MIN_ANGLE := 15.0   # градусов между velocity и wish
+const STRIDE_FREQ := 1.7            # Гц: пульсация тяги — "толчки"
 const STRIDE_AMP := 0.35
 const GRIP_MIN_SPEED := 0.3
 const SPRAY_MIN_SPEED := 3.0
@@ -18,71 +22,87 @@ const SPRAY_MIN_SPEED := 3.0
 var params: SkatingParams = SkatingParams.new()
 
 var _stride_time := 0.0
+var _yaw_rate := 0.0     # текущая угловая скорость корпуса, рад/с
+var _pivoting := false
 
 @onready var _spray: GPUParticles3D = $IceSpray
 
 
 func _physics_process(delta: float) -> void:
-	var turn_input := Input.get_axis("turn_right", "turn_left")  # A = +1 (влево)
-	var throttle := Input.is_action_pressed("move_forward")
-	var brake_key := Input.is_action_pressed("move_back")
+	var brake := Input.is_action_pressed("move_back")
+	var wish := _wish_dir()
 
 	var hvel := Vector3(velocity.x, 0.0, velocity.z)
 	var speed := hvel.length()
-	var forward := -global_transform.basis.z
-	forward.y = 0.0
-	forward = forward.normalized()
+	var forward := _forward()
+	var vel_dir := hvel / speed if speed > 0.01 else forward
 
-	var braking := brake_key and hvel.dot(forward) > 0.5  # ещё едем вперёд — юз
-	var reversing := brake_key and not braking             # почти стоим — едем назад
-	var hockey_stop := braking and speed > HOCKEY_STOP_MIN_SPEED
+	var hockey_stop := brake and speed > HOCKEY_STOP_MIN_SPEED
+	var wish_angle := rad_to_deg(vel_dir.angle_to(wish)) if wish != Vector3.ZERO else 0.0
 
-	# --- Поворот корпуса: на месте почти мгновенно, на скорости — большая дуга.
+	# --- Авто-пивот: липкое состояние "юз до pivot_exit_speed, корпус к wish".
+	if _pivoting:
+		if wish == Vector3.ZERO or brake or speed <= params.pivot_exit_speed \
+				or wish_angle < params.carve_angle:
+			_pivoting = false
+	elif wish != Vector3.ZERO and not brake and speed > LOW_SPEED \
+			and wish_angle > params.pivot_angle:
+		_pivoting = true
+
+	# --- Поворот корпуса: лимит скорости (зависит от хода) + лимит ускорения.
 	var speed_t := clampf(speed / params.max_speed, 0.0, 1.0)
-	var turn_rate := deg_to_rad(lerpf(params.turn_rate_at_zero, params.turn_rate_at_max, speed_t))
-	if hockey_stop:
-		# В хоккейном стопе корпус разрешаем доворачивать боком быстро.
-		turn_rate = deg_to_rad(params.turn_rate_at_zero) * HOCKEY_STOP_TURN_MULT
-	rotation.y += turn_input * turn_rate * delta
-	forward = -global_transform.basis.z
-	forward.y = 0.0
-	forward = forward.normalized()
+	var max_rate := deg_to_rad(lerpf(params.turn_rate_at_zero, params.turn_rate_at_max, speed_t))
+	if _pivoting or hockey_stop:
+		max_rate = deg_to_rad(params.turn_rate_at_zero) * HOCKEY_STOP_TURN_MULT
+	elif wish_angle > params.carve_angle:
+		max_rate *= HARD_TURN_RATE_MULT
+	var angular_accel := deg_to_rad(params.facing_angular_accel)
+	var desired_rate := 0.0
+	if wish != Vector3.ZERO:
+		var yaw_error := forward.signed_angle_to(wish, Vector3.UP)
+		# Упреждение торможения: не быстрее, чем можно погасить к цели —
+		# иначе корпус с инерцией проскакивает wish и осциллирует.
+		var stop_rate := sqrt(2.0 * angular_accel * absf(yaw_error))
+		desired_rate = signf(yaw_error) * minf(max_rate, stop_rate)
+	_yaw_rate = move_toward(_yaw_rate, desired_rate, angular_accel * delta)
+	rotation.y += _yaw_rate * delta
+	forward = _forward()
 
-	# --- Тяга вперёд (W): нелинейная кривая, у максимума стремится к нулю.
-	if throttle:
+	# --- Продольная динамика.
+	if brake:
+		_stride_time = 0.0
+		var decel := params.brake_force * (HOCKEY_STOP_BRAKE_MULT if hockey_stop else 1.0)
+		hvel = vel_dir * maxf(speed - decel * delta, 0.0)
+	elif _pivoting:
+		# Юз-торможение перед разворотом (как хоккейный стоп).
+		_stride_time = 0.0
+		hvel = vel_dir * maxf(speed - params.brake_force * HOCKEY_STOP_BRAKE_MULT * delta, 0.0)
+	elif wish != Vector3.ZERO:
+		# Тяга вдоль корпуса: нелинейная кривая + пульс "толчков".
 		_stride_time += delta
 		var ratio := clampf(hvel.dot(forward) / params.max_speed, 0.0, 1.0)
 		var thrust := params.accel * pow(1.0 - ratio, params.accel_curve_power)
 		thrust *= 1.0 + STRIDE_AMP * sin(TAU * STRIDE_FREQ * _stride_time)
-		if absf(turn_input) > 0.0 and speed > CROSSOVER_MIN_SPEED:
+		if wish_angle > CROSSOVER_MIN_ANGLE and speed > CROSSOVER_MIN_SPEED:
 			thrust += params.crossover_boost  # перебежка в дуге
 		hvel += forward * thrust * delta
+		# Скраб: потеря скорости пропорциональна фактическому довороту корпуса.
+		var scrub_k := params.turn_scrub if wish_angle < params.carve_angle else params.turn_scrub_hard
+		var scrub := scrub_k * absf(rad_to_deg(_yaw_rate)) / 90.0
+		hvel *= maxf(1.0 - scrub * delta, 0.0)
 	else:
+		# Накат по инерции.
 		_stride_time = 0.0
+		hvel = vel_dir * maxf(speed - params.coast_friction * delta, 0.0)
 
-	# --- Торможение / езда назад / накат.
-	if braking:
-		var decel := params.brake_force * (HOCKEY_STOP_BRAKE_MULT if hockey_stop else 1.0)
-		hvel = hvel.normalized() * maxf(speed - decel * delta, 0.0)
-	elif reversing:
-		var back_speed := -hvel.dot(forward)
-		var max_back := params.max_speed * params.backward_speed_ratio
-		var ratio_b := clampf(back_speed / max_back, 0.0, 1.0)
-		var thrust_b := params.accel * BACKWARD_ACCEL_RATIO * pow(1.0 - ratio_b, params.accel_curve_power)
-		hvel -= forward * thrust_b * delta
-	elif not throttle:
-		hvel = hvel.normalized() * maxf(speed - params.coast_friction * delta, 0.0)
-
-	# --- Сцепление коньков: velocity частично доворачивается к facing.
+	# --- Сцепление коньков: velocity доворачивается к facing.
 	speed = hvel.length()
 	if speed > GRIP_MIN_SPEED:
 		var dir := hvel / speed
 		var target_dir := forward if dir.dot(forward) >= 0.0 else -forward
-		var g := params.grip * (params.brake_grip_drop if braking else 1.0)
-		var weight := 1.0 - exp(-g * delta)
-		hvel = dir.slerp(target_dir, weight).normalized() * speed
+		var g := params.grip * (params.brake_grip_drop if brake or _pivoting else 1.0)
+		hvel = dir.slerp(target_dir, 1.0 - exp(-g * delta)).normalized() * speed
 
-	# Кроссовер-буст не должен разгонять выше максимума.
 	if hvel.length() > params.max_speed:
 		hvel = hvel.normalized() * params.max_speed
 
@@ -94,4 +114,24 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 	global_position.y = 0.0
 
-	_spray.emitting = brake_key and speed > SPRAY_MIN_SPEED
+	_spray.emitting = (brake or _pivoting) and speed > SPRAY_MIN_SPEED
+
+
+## WASD -> желаемое направление движения в плоскости, относительно yaw камеры.
+## S в направление не входит — это тормоз.
+func _wish_dir() -> Vector3:
+	var x := Input.get_action_strength("turn_right") - Input.get_action_strength("turn_left")
+	var forward_input := Input.get_action_strength("move_forward")
+	if x == 0.0 and forward_input == 0.0:
+		return Vector3.ZERO
+	var yaw := 0.0
+	var camera := get_viewport().get_camera_3d()
+	if camera:
+		yaw = camera.global_rotation.y
+	return Vector3(x, 0.0, -forward_input).rotated(Vector3.UP, yaw).normalized()
+
+
+func _forward() -> Vector3:
+	var f := -global_transform.basis.z
+	f.y = 0.0
+	return f.normalized()
