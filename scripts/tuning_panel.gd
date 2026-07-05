@@ -3,6 +3,8 @@ extends CanvasLayer
 ## сохранение/загрузка user://skating_params.json, сброс к дефолтам.
 ## UI строится процедурно по SkatingParams.PARAM_DEFS.
 
+signal rebuild_requested
+
 var params: SkatingParams
 
 var _rows := {}  # key -> {"slider": HSlider, "value": Label}
@@ -101,6 +103,11 @@ func _build_ui() -> void:
 	reset_button.text = "Сброс к дефолту"
 	reset_button.pressed.connect(_on_reset)
 	buttons.add_child(reset_button)
+
+	var rebuild_button := Button.new()
+	rebuild_button.text = "Пересобрать каток"
+	rebuild_button.pressed.connect(func(): rebuild_requested.emit())
+	vbox.add_child(rebuild_button)
 
 
 func refresh_values() -> void:

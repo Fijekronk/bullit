@@ -14,6 +14,8 @@ const PUCK_SPAWN := Vector3(0.0, 0.1, 0.0)
 @onready var player: Player = $Player
 @onready var chase_camera: Camera3D = $Camera3D
 @onready var tuning_panel: CanvasLayer = $TuningPanel
+@onready var rink: Node3D = $Rink
+@onready var cones: Node3D = $Cones
 
 var score := {"left": 0, "right": 0}
 var skating_params := SkatingParams.new()
@@ -29,8 +31,21 @@ func _ready() -> void:
 	chase_camera.params = skating_params
 	chase_camera.target = player
 	tuning_panel.setup(skating_params)
+	tuning_panel.rebuild_requested.connect(_rebuild_rink)
+	_rebuild_rink()  # применить размеры из JSON и расставить ворота/конусы
 	# Мышь не должна выпадать за окно при финтах.
 	Input.mouse_mode = Input.MOUSE_MODE_CONFINED
+
+
+## Пересобрать каток под текущие параметры и переставить ворота, конусы, шайбу.
+func _rebuild_rink() -> void:
+	rink.rebuild(skating_params.rink_length, skating_params.rink_width, skating_params.corner_radius)
+	var goal_x: float = rink.goal_line_x()
+	goals[0].transform = Transform3D(Basis.IDENTITY, Vector3(-goal_x, 0.0, 0.0))
+	goals[1].transform = Transform3D(Basis(Vector3.UP, PI), Vector3(goal_x, 0.0, 0.0))
+	cones.layout(skating_params.rink_length, skating_params.rink_width)
+	if absf(puck.global_position.x) > goal_x or absf(puck.global_position.z) > skating_params.rink_width / 2.0:
+		_respawn_puck()
 
 
 func _physics_process(_delta: float) -> void:

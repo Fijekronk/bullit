@@ -1,7 +1,7 @@
 class_name SkatingParams
 extends Resource
-## Все параметры катания, управления, камеры и клюшки. Единственный источник
-## дефолтов — PARAM_DEFS: по нему же строится тюнинг-панель (F1) и JSON.
+## Все параметры катания, управления, камеры, клюшки и арены. Единственный
+## источник дефолтов — PARAM_DEFS: по нему же строится тюнинг-панель (F1) и JSON.
 ## def.type == "toggle" — булев переключатель (CheckButton вместо слайдера).
 
 const SAVE_PATH := "user://skating_params.json"
@@ -11,7 +11,7 @@ const PARAM_DEFS := [
 	{"section": "Катание", "key": "accel", "label": "Тяга (м/с²)", "min": 2.0, "max": 20.0, "step": 0.1, "default": 8.0},
 	{"section": "Катание", "key": "accel_curve_power", "label": "Кривая разгона", "min": 0.3, "max": 3.0, "step": 0.05, "default": 1.0},
 	{"section": "Катание", "key": "turn_rate_at_zero", "label": "Поворот на месте (°/с)", "min": 90.0, "max": 900.0, "step": 5.0, "default": 540.0},
-	{"section": "Катание", "key": "turn_rate_at_max", "label": "Поворот на макс. (°/с)", "min": 30.0, "max": 360.0, "step": 5.0, "default": 130.0},
+	{"section": "Катание", "key": "turn_rate_at_max", "label": "Поворот на макс. (°/с)", "min": 30.0, "max": 360.0, "step": 5.0, "default": 170.0},
 	{"section": "Катание", "key": "grip", "label": "Сцепление коньков (1/с)", "min": 0.5, "max": 12.0, "step": 0.1, "default": 5.0},
 	{"section": "Катание", "key": "brake_force", "label": "Торможение (м/с²)", "min": 2.0, "max": 20.0, "step": 0.1, "default": 7.0},
 	{"section": "Катание", "key": "brake_grip_drop", "label": "Grip при юзе (x)", "min": 0.0, "max": 1.0, "step": 0.01, "default": 0.35},
@@ -21,9 +21,10 @@ const PARAM_DEFS := [
 	{"section": "Управление", "key": "carve_angle", "label": "Угол резаной дуги (°)", "min": 30.0, "max": 90.0, "step": 1.0, "default": 60.0},
 	{"section": "Управление", "key": "hard_angle", "label": "Угол крутой дуги (°)", "min": 90.0, "max": 150.0, "step": 1.0, "default": 120.0},
 	{"section": "Управление", "key": "pivot_angle", "label": "Угол авто-пивота (°)", "min": 90.0, "max": 170.0, "step": 1.0, "default": 120.0},
-	{"section": "Управление", "key": "turn_scrub", "label": "Потеря скорости в дуге", "min": 0.0, "max": 0.6, "step": 0.01, "default": 0.15},
+	{"section": "Управление", "key": "turn_scrub", "label": "Потеря в резаной дуге", "min": 0.0, "max": 0.6, "step": 0.01, "default": 0.0},
 	{"section": "Управление", "key": "turn_scrub_hard", "label": "Потеря в крутой дуге", "min": 0.0, "max": 1.0, "step": 0.01, "default": 0.35},
-	{"section": "Управление", "key": "facing_angular_accel", "label": "Угл. ускорение корпуса (°/с²)", "min": 180.0, "max": 2000.0, "step": 10.0, "default": 720.0},
+	{"section": "Управление", "key": "crossover_gain", "label": "Разгон в дуге (x тяги)", "min": 0.0, "max": 0.6, "step": 0.01, "default": 0.18},
+	{"section": "Управление", "key": "facing_angular_accel", "label": "Угл. ускорение корпуса (°/с²)", "min": 180.0, "max": 2500.0, "step": 10.0, "default": 1100.0},
 	{"section": "Управление", "key": "pivot_exit_speed", "label": "Скорость выхода из пивота (м/с)", "min": 0.5, "max": 4.0, "step": 0.1, "default": 1.5},
 	{"section": "Камера", "key": "camera_yaw_follow", "label": "Камера за игроком (yaw)", "type": "toggle", "default": true},
 	{"section": "Камера", "key": "camera_height", "label": "Высота (м)", "min": 3.0, "max": 30.0, "step": 0.25, "default": 5.5},
@@ -36,11 +37,12 @@ const PARAM_DEFS := [
 	{"section": "Камера", "key": "cam_max_yaw_speed", "label": "Макс. скорость yaw (°/с)", "min": 30.0, "max": 360.0, "step": 5.0, "default": 150.0},
 	{"section": "Камера", "key": "cam_yaw_deadzone", "label": "Мёртвая зона yaw (°)", "min": 0.0, "max": 30.0, "step": 1.0, "default": 10.0},
 	{"section": "Клюшка", "key": "handedness_right", "label": "Хват: правый", "type": "toggle", "default": true},
-	{"section": "Клюшка", "key": "stick_min_reach", "label": "Мин. досягаемость (м)", "min": 0.2, "max": 1.0, "step": 0.01, "default": 0.45},
-	{"section": "Клюшка", "key": "stick_max_reach", "label": "Макс. досягаемость (м)", "min": 0.8, "max": 2.5, "step": 0.01, "default": 1.55},
-	{"section": "Клюшка", "key": "forehand_arc", "label": "Сектор форхенда (°)", "min": 120.0, "max": 270.0, "step": 5.0, "default": 200.0},
-	{"section": "Клюшка", "key": "backhand_arc", "label": "Сектор бэкхенда (°)", "min": 20.0, "max": 120.0, "step": 5.0, "default": 60.0},
-	{"section": "Клюшка", "key": "backhand_reach", "label": "Досягаемость бэкхенда (м)", "min": 0.5, "max": 1.6, "step": 0.01, "default": 1.0},
+	{"section": "Клюшка", "key": "hand_offset_side", "label": "Смещение хвата вбок (м)", "min": 0.0, "max": 0.6, "step": 0.01, "default": 0.22},
+	{"section": "Клюшка", "key": "hand_offset_forward", "label": "Смещение хвата вперёд (м)", "min": 0.0, "max": 0.6, "step": 0.01, "default": 0.15},
+	{"section": "Клюшка", "key": "stick_length", "label": "Длина клюшки (м)", "min": 0.8, "max": 2.2, "step": 0.01, "default": 1.35},
+	{"section": "Клюшка", "key": "reach_variation", "label": "Радиальный люфт (м)", "min": 0.0, "max": 0.5, "step": 0.01, "default": 0.12},
+	{"section": "Клюшка", "key": "backhand_limit", "label": "Граница бэкхенда (°)", "min": -120.0, "max": 0.0, "step": 5.0, "default": -60.0},
+	{"section": "Клюшка", "key": "forehand_limit", "label": "Граница форхенда (°)", "min": 120.0, "max": 270.0, "step": 5.0, "default": 200.0},
 	{"section": "Клюшка", "key": "stick_smoothing", "label": "Сглаживание цели (1/с)", "min": 2.0, "max": 60.0, "step": 0.5, "default": 25.0},
 	{"section": "Клюшка", "key": "blade_max_speed", "label": "Скорость крюка (м/с)", "min": 4.0, "max": 30.0, "step": 0.5, "default": 14.0},
 	{"section": "Клюшка", "key": "blade_max_accel", "label": "Ускорение крюка (м/с²)", "min": 20.0, "max": 300.0, "step": 5.0, "default": 90.0},
@@ -52,13 +54,16 @@ const PARAM_DEFS := [
 	{"section": "Клюшка", "key": "catch_max_rel_speed", "label": "Порог приёма (м/с)", "min": 4.0, "max": 25.0, "step": 0.5, "default": 12.0},
 	{"section": "Клюшка", "key": "catch_strength", "label": "Сила приёма (k)", "min": 5.0, "max": 80.0, "step": 0.5, "default": 35.0},
 	{"section": "Клюшка", "key": "catch_max_force", "label": "Макс. сила приёма (Н)", "min": 5.0, "max": 60.0, "step": 0.5, "default": 20.0},
+	{"section": "Арена", "key": "rink_length", "label": "Длина катка (м)", "min": 30.0, "max": 70.0, "step": 1.0, "default": 56.0},
+	{"section": "Арена", "key": "rink_width", "label": "Ширина катка (м)", "min": 16.0, "max": 36.0, "step": 1.0, "default": 26.0},
+	{"section": "Арена", "key": "corner_radius", "label": "Радиус углов (м)", "min": 2.0, "max": 12.0, "step": 0.5, "default": 7.0},
 ]
 
 @export var max_speed := 9.0
 @export var accel := 8.0
 @export var accel_curve_power := 1.0
 @export var turn_rate_at_zero := 540.0
-@export var turn_rate_at_max := 130.0
+@export var turn_rate_at_max := 170.0
 @export var grip := 5.0
 @export var brake_force := 7.0
 @export var brake_grip_drop := 0.35
@@ -68,9 +73,10 @@ const PARAM_DEFS := [
 @export var carve_angle := 60.0
 @export var hard_angle := 120.0
 @export var pivot_angle := 120.0
-@export var turn_scrub := 0.15
+@export var turn_scrub := 0.0
 @export var turn_scrub_hard := 0.35
-@export var facing_angular_accel := 720.0
+@export var crossover_gain := 0.18
+@export var facing_angular_accel := 1100.0
 @export var pivot_exit_speed := 1.5
 @export var camera_yaw_follow := true
 @export var camera_height := 5.5
@@ -83,11 +89,12 @@ const PARAM_DEFS := [
 @export var cam_max_yaw_speed := 150.0
 @export var cam_yaw_deadzone := 10.0
 @export var handedness_right := true
-@export var stick_min_reach := 0.45
-@export var stick_max_reach := 1.55
-@export var forehand_arc := 200.0
-@export var backhand_arc := 60.0
-@export var backhand_reach := 1.0
+@export var hand_offset_side := 0.22
+@export var hand_offset_forward := 0.15
+@export var stick_length := 1.35
+@export var reach_variation := 0.12
+@export var backhand_limit := -60.0
+@export var forehand_limit := 200.0
 @export var stick_smoothing := 25.0
 @export var blade_max_speed := 14.0
 @export var blade_max_accel := 90.0
@@ -99,6 +106,9 @@ const PARAM_DEFS := [
 @export var catch_max_rel_speed := 12.0
 @export var catch_strength := 35.0
 @export var catch_max_force := 20.0
+@export var rink_length := 56.0
+@export var rink_width := 26.0
+@export var corner_radius := 7.0
 
 
 func reset_to_defaults() -> void:

@@ -8,7 +8,7 @@ extends Camera3D
 ## Позиция в обоих режимах плавно догоняет точку слежения с look-ahead
 ## и клэмпом в пределах катка.
 
-const RINK_CLAMP := Vector2(18.0, 8.0)  # мягкий клэмп точки слежения (x, z)
+const CLAMP_MARGIN := 2.0  # отступ клэмпа точки слежения от борта
 const YAW_FOLLOW_MIN_SPEED := 2.0
 const IDLE_YAW_SPEED_SCALE := 0.4  # доля cam_max_yaw_speed при довороте к facing
 
@@ -33,8 +33,10 @@ func _physics_process(delta: float) -> void:
 	if speed > 0.1:
 		look_target += hvel / speed * params.camera_lookahead \
 				* clampf(speed / params.max_speed, 0.0, 1.0)
-	look_target.x = clampf(look_target.x, -RINK_CLAMP.x, RINK_CLAMP.x)
-	look_target.z = clampf(look_target.z, -RINK_CLAMP.y, RINK_CLAMP.y)
+	var clamp_x := params.rink_length / 2.0 - CLAMP_MARGIN
+	var clamp_z := params.rink_width / 2.0 - CLAMP_MARGIN
+	look_target.x = clampf(look_target.x, -clamp_x, clamp_x)
+	look_target.z = clampf(look_target.z, -clamp_z, clamp_z)
 	look_target.y = 0.0
 
 	if not _initialized:

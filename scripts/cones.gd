@@ -1,49 +1,65 @@
 extends Node3D
-## Полигон для теста дриблинга: конусы линией по центральной оси с шагом 3 м
-## и пара у бортов. F3 — показать/скрыть (коллизии выключаются вместе с видимостью).
-## Центр катка оставлен свободным — там респаунится шайба.
+## Полигон для теста дриблинга: слаломная линия конусов + пара у бортов.
+## Расстановка масштабируется под размер катка (layout из main при пересборке).
+## F3 — показать/скрыть. Центр катка свободен — там респаунится шайба.
 
-const CONE_POSITIONS: Array[Vector3] = [
-	Vector3(2, 0, 0), Vector3(5, 0, 0), Vector3(8, 0, 0), Vector3(11, 0, 0), Vector3(14, 0, 0),
-	Vector3(-5, 0, 8.5), Vector3(-9, 0, -8.5),
-]
 const CONE_RADIUS := 0.15
 const CONE_HEIGHT := 0.4
+const SPACING := 3.0
 
 var _active := true
-var _shapes: Array[CollisionShape3D] = []
+var _material := StandardMaterial3D.new()
 
 
 func _ready() -> void:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = Color(1.0, 0.45, 0.05)
-	material.roughness = 0.7
-	for pos in CONE_POSITIONS:
+	_material.albedo_color = Color(1.0, 0.45, 0.05)
+	_material.roughness = 0.7
+
+
+## Пересобрать конусы под текущие габариты катка.
+func layout(rink_length: float, rink_width: float) -> void:
+	for child in get_children():
+		child.queue_free()
+
+	var positions: Array[Vector3] = []
+	# Слаломная линия по центральной оси, от центра к правой зоне.
+	var max_x := rink_length / 2.0 - 6.0
+	var x := SPACING
+	while x <= max_x:
+		positions.append(Vector3(x, 0, 0))
+		x += SPACING
+	# Пара у бортов на левой половине.
+	var board_z := rink_width / 2.0 - 2.0
+	positions.append(Vector3(-rink_length * 0.12, 0, board_z))
+	positions.append(Vector3(-rink_length * 0.24, 0, -board_z))
+
+	for pos in positions:
 		var body := StaticBody3D.new()
 		body.position = pos
 		body.collision_layer = 32  # слой "стены", как борта
 		add_child(body)
 
-		# Коллизия продлена под лёд: торец цилиндра на уровне льда даёт
-		# контакт "ребро о ребро" и подбрасывает скользящую шайбу.
+		# Коллизия продлена под лёд: торец на уровне льда подбрасывает шайбу.
 		var cylinder := CylinderShape3D.new()
 		cylinder.radius = CONE_RADIUS
 		cylinder.height = CONE_HEIGHT + 0.3
 		var shape := CollisionShape3D.new()
 		shape.shape = cylinder
 		shape.position = Vector3(0.0, (CONE_HEIGHT - 0.3) / 2.0, 0.0)
+		shape.disabled = not _active
 		body.add_child(shape)
-		_shapes.append(shape)
 
 		var mesh := MeshInstance3D.new()
 		var cone := CylinderMesh.new()
 		cone.top_radius = 0.03
 		cone.bottom_radius = CONE_RADIUS
 		cone.height = CONE_HEIGHT
-		cone.material = material
+		cone.material = _material
 		mesh.mesh = cone
-		mesh.position = shape.position
+		mesh.position = Vector3(0.0, CONE_HEIGHT / 2.0, 0.0)
 		body.add_child(mesh)
+
+	visible = _active
 
 
 func _input(event: InputEvent) -> void:
@@ -54,5 +70,7 @@ func _input(event: InputEvent) -> void:
 func set_active(value: bool) -> void:
 	_active = value
 	visible = value
-	for shape in _shapes:
-		shape.disabled = not value
+	for body in get_children():
+		for shape in body.get_children():
+			if shape is CollisionShape3D:
+				shape.disabled = not value

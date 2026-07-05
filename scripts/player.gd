@@ -80,14 +80,18 @@ func _physics_process(delta: float) -> void:
 	elif wish != Vector3.ZERO:
 		# Тяга вдоль корпуса: нелинейная кривая + пульс "толчков".
 		_stride_time += delta
+		var carving := wish_angle < params.carve_angle
 		var ratio := clampf(hvel.dot(forward) / params.max_speed, 0.0, 1.0)
 		var thrust := params.accel * pow(1.0 - ratio, params.accel_curve_power)
 		thrust *= 1.0 + STRIDE_AMP * sin(TAU * STRIDE_FREQ * _stride_time)
+		# Резаная дуга с газом РАЗГОНЯЕТ (перебежки): множитель тяги.
+		if carving and wish_angle > CROSSOVER_MIN_ANGLE:
+			thrust *= 1.0 + params.crossover_gain
 		if wish_angle > CROSSOVER_MIN_ANGLE and speed > CROSSOVER_MIN_SPEED:
-			thrust += params.crossover_boost  # перебежка в дуге
+			thrust += params.crossover_boost
 		hvel += forward * thrust * delta
-		# Скраб: потеря скорости пропорциональна фактическому довороту корпуса.
-		var scrub_k := params.turn_scrub if wish_angle < params.carve_angle else params.turn_scrub_hard
+		# Скраб: в резаной дуге потерь нет (turn_scrub≈0), в крутой — заметны.
+		var scrub_k := params.turn_scrub if carving else params.turn_scrub_hard
 		var scrub := scrub_k * absf(rad_to_deg(_yaw_rate)) / 90.0
 		hvel *= maxf(1.0 - scrub * delta, 0.0)
 	else:
@@ -96,11 +100,14 @@ func _physics_process(delta: float) -> void:
 		hvel = vel_dir * maxf(speed - params.coast_friction * delta, 0.0)
 
 	# --- Сцепление коньков: velocity доворачивается к facing.
+	#     В резаной дуге доворот на +25% живее (дуга ощущается точнее).
 	speed = hvel.length()
 	if speed > GRIP_MIN_SPEED:
 		var dir := hvel / speed
 		var target_dir := forward if dir.dot(forward) >= 0.0 else -forward
 		var g := params.grip * (params.brake_grip_drop if brake or _pivoting else 1.0)
+		if wish != Vector3.ZERO and not brake and not _pivoting and wish_angle < params.carve_angle:
+			g *= 1.25
 		hvel = dir.slerp(target_dir, 1.0 - exp(-g * delta)).normalized() * speed
 
 	if hvel.length() > params.max_speed:
