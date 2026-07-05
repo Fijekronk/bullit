@@ -1,0 +1,89 @@
+[gd_scene load_steps=14 format=3]
+
+[ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
+[ext_resource type="Script" path="res://scripts/debug_viz.gd" id="2_viz"]
+[ext_resource type="Script" path="res://scripts/blade.gd" id="3_blade"]
+[ext_resource type="PhysicsMaterial" path="res://assets/materials/blade_physics.tres" id="4_blade_phys"]
+
+[sub_resource type="CapsuleShape3D" id="capsule_shape"]
+radius = 0.35
+height = 1.8
+
+[sub_resource type="CylinderShape3D" id="skirt_shape"]
+radius = 0.35
+height = 0.7
+
+[sub_resource type="StandardMaterial3D" id="mat_body"]
+albedo_color = Color(0.95, 0.52, 0.13, 1)
+roughness = 0.7
+
+[sub_resource type="CapsuleMesh" id="mesh_body"]
+material = SubResource("mat_body")
+radius = 0.35
+height = 1.8
+
+[sub_resource type="StandardMaterial3D" id="mat_nose"]
+albedo_color = Color(0.15, 0.16, 0.2, 1)
+roughness = 0.6
+
+[sub_resource type="BoxMesh" id="mesh_nose"]
+material = SubResource("mat_nose")
+size = Vector3(0.14, 0.1, 0.35)
+
+[sub_resource type="ParticleProcessMaterial" id="spray_process"]
+direction = Vector3(0, 1, 0)
+spread = 60.0
+initial_velocity_min = 1.5
+initial_velocity_max = 3.5
+gravity = Vector3(0, -9.8, 0)
+scale_min = 0.5
+scale_max = 1.0
+
+[sub_resource type="StandardMaterial3D" id="mat_spray"]
+shading_mode = 0
+albedo_color = Color(0.95, 0.98, 1, 1)
+
+[sub_resource type="BoxMesh" id="mesh_spray"]
+material = SubResource("mat_spray")
+size = Vector3(0.04, 0.04, 0.04)
+
+[node name="Player" type="CharacterBody3D"]
+collision_layer = 4
+collision_mask = 42
+motion_mode = 1
+script = ExtResource("1_player")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.9, 0)
+shape = SubResource("capsule_shape")
+
+[node name="SkirtShape" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.15, 0)
+shape = SubResource("skirt_shape")
+
+[node name="BodyMesh" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.9, 0)
+mesh = SubResource("mesh_body")
+
+[node name="Nose" type="MeshInstance3D" parent="."]
+position = Vector3(0, 1.15, -0.42)
+mesh = SubResource("mesh_nose")
+
+[node name="IceSpray" type="GPUParticles3D" parent="."]
+position = Vector3(0, 0.15, 0)
+emitting = false
+amount = 48
+lifetime = 0.5
+process_material = SubResource("spray_process")
+draw_pass_1 = SubResource("mesh_spray")
+
+[node name="DebugViz" type="Node3D" parent="."]
+script = ExtResource("2_viz")
+
+[node name="Blade" type="AnimatableBody3D" parent="."]
+top_level = true
+collision_layer = 16
+collision_mask = 2
+physics_material_override = ExtResource("4_blade_phys")
+sync_to_physics = false
+script = ExtResource("3_blade")
