@@ -39,6 +39,12 @@ var _round := "play"        # play / reset (пауза перед вбросом
 var _reset_timer := 0.0
 const RESET_PAUSE := 3.0
 
+# Броски (серверный авторитет): состояние заряда по игроку + прицел из пакета.
+var _shot := {}   # id -> {lmb_t, charging, charge, rmb_held, rmb_t, pass_charge, windup_cd}
+var _aim := {}    # id -> Vector3 (направление броска из камеры пира)
+const AIM_DISTANCE := 40.0
+const AIM_CONE_DEG := 14.0
+
 # HUD
 var _hud: CanvasLayer
 var _score_label: Label
@@ -46,6 +52,16 @@ var _round_label: Label
 var _net_panel: Panel
 var _net_label: Label
 var _net_debug := false
+var _hud_ctrl: Control
+# Читается hud.gd (как у main.gd): заряд/пас локального игрока + ссылки.
+var charge := 0.0
+var pass_charge := 0.0
+var skating_params            # алиас params для hud.gd
+var _hud_lmb_t := 0.0         # клиентский мираж заряда для HUD
+var _hud_rmb_t := 0.0
+var _hud_rmb_held := false
+var player                    # локальный полевой игрок (для hud.gd)
+var blade                     # его клюшка (для hud.gd)
 
 # Headless-хуки для 2-процессного автотеста:
 var _autofwd := false       # клиент шлёт move_forward каждый тик
@@ -60,6 +76,7 @@ var _scoretest_log := []
 
 func _ready() -> void:
 	params.load_from_json()
+	skating_params = params
 	# Выбор из меню (autoload). Headless-аргументы имеют приоритет.
 	if Engine.has_singleton("NetConfig") or get_node_or_null("/root/NetConfig"):
 		var cfg := get_node_or_null("/root/NetConfig")
@@ -93,6 +110,8 @@ func _ready() -> void:
 		if net.host(port, nick):
 			net.set_role(1, role)
 			_spawn_player(1)  # хост-игрок (peer 1)
+			if role != "goalie" and _hud_ctrl and player:
+				_hud_ctrl.main = self   # включаем полевой HUD у хоста
 			# Маячок в локальную сеть — чтобы клиент нашёл игру без ввода IP.
 			_lan = LanDiscovery.new()
 			add_child(_lan)
@@ -147,6 +166,7 @@ func _build_arena() -> void:
 	var cam := preload("res://scripts/chase_camera.gd").new()
 	cam.name = "Camera3D"
 	cam.params = params
+	cam.fov = 55.0
 	cam.current = true
 	add_child(cam)
 
@@ -183,6 +203,9 @@ func _make_field(id: int, side: int) -> Player:
 	add_child(p)
 	p.global_position = Vector3(-side * 4.0, 0.0, 0.0)
 	p.rotation.y = 0.0 if side > 0 else PI
+	if id == multiplayer.get_unique_id():
+		player = p
+		blade = p.get_node_or_null("Blade")
 	return p
 
 
@@ -233,6 +256,10 @@ func _on_input_received(id: int, tick: int, packet: Dictionary) -> void:
 	# Вратарь разворачивается по yaw камеры пира (у пира нет камеры на сервере).
 	if p is Goalie and packet.has("yaw"):
 		p.net_yaw = packet["yaw"]
+	# Полевой: прицел броска — направление из камеры пира (в пакете).
+	if p is Player and packet.has("aim"):
+		var a = packet["aim"]
+		_aim[id] = Vector3(a[0], 0.0, a[1])
 
 
 func _physics_process(delta: float) -> void:
@@ -348,6 +375,12 @@ func _build_hud() -> void:
 	_net_label.offset_left = 10
 	_net_label.offset_top = 8
 	_net_panel.add_child(_net_label)
+	# Полевой HUD (прицел, кольцо заряда, пас, стамина/рывок) — как в одиночной.
+	_hud_ctrl = preload("res://scripts/hud.gd").new()
+	_hud_ctrl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_hud_ctrl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud_ctrl.main = null   # включится, когда появится локальный полевой игрок
+	_hud.add_child(_hud_ctrl)
 	_update_score_hud()
 
 
@@ -430,28 +463,132 @@ func _server_tick(delta: float) -> void:
 			_do_faceoff()
 	else:
 		_check_out_of_bounds()
+	# Броски/пасы полевых игроков (серверный авторитет).
+	for id in _players:
+		if _players[id] is Player:
+			_server_update_shots(id, delta)
+	# HUD хоста: заряд локального игрока из его состояния броска.
+	_sync_local_hud_charge()
 	# Симуляция игроков/шайбы идёт сама (их _physics_process). Рассылаем снапшот.
 	var data := _make_snapshot()
 	net.broadcast_snapshot(_tick, data, delta)
 
 
-const GOAL_HALF_W := 0.915   # половина ширины створа (GOAL_WIDTH/2)
+## Серверный аналог main._update_shots для игрока id: ЛКМ кистевой/щелчок,
+## ПКМ пас; прицел — из пакета (_aim[id]). Броски только вне стойки.
+func _server_update_shots(id: int, delta: float) -> void:
+	var p = _players[id]
+	var b = p.get_node_or_null("Blade")
+	if b == null:
+		return
+	if not _shot.has(id):
+		_shot[id] = {"lmb_t": 0.0, "charging": false, "charge": 0.0,
+				"rmb_held": false, "rmb_t": 0.0, "pass_charge": 0.0, "windup_cd": 0.0}
+	var s: Dictionary = _shot[id]
+	# Броски запрещены в стойке / без управления (как в одиночной).
+	if (not p.input_enabled) or p.is_stance or _round != "play":
+		_reset_shot_state(s, p, b)
+		return
+	var pr := params
+	s["windup_cd"] = maxf(0.0, s["windup_cd"] - delta)
+	var aim: Vector3 = _aim.get(id, -Vector3(sin(p.rotation.y), 0, cos(p.rotation.y)))
+	# --- ЛКМ: кистевой / щелчок ---
+	if p.input.just_pressed("gesture_primary"):
+		s["lmb_t"] = 0.0
+		s["charging"] = false
+	if p.input.pressed("gesture_primary"):
+		s["lmb_t"] += delta
+		if s["lmb_t"] > pr.wrist_tap_time and s["windup_cd"] <= 0.0:
+			s["charging"] = true
+			s["charge"] = clampf((s["lmb_t"] - pr.wrist_tap_time) / pr.slap_charge_time, 0.0, 1.0)
+			b.windup = s["charge"]
+			p.speed_cap = pr.slap_move_cap
+			p.aim_turn_dir = aim
+	if p.input.just_released("gesture_primary"):
+		if s["charging"]:
+			_do_slap(b, aim, s["charge"])
+		else:
+			_do_wrist(b, aim)
+		_reset_shot_state(s, p, b)
+	# --- ПКМ: пас / отмена замаха ---
+	if p.input.just_pressed("gesture_secondary"):
+		if s["charging"]:
+			_reset_shot_state(s, p, b)
+			s["windup_cd"] = 0.2
+		else:
+			s["rmb_held"] = true
+			s["rmb_t"] = 0.0
+	if s["rmb_held"]:
+		s["rmb_t"] += delta
+		s["pass_charge"] = clampf(s["rmb_t"] / 0.5, 0.0, 1.0)
+	if p.input.just_released("gesture_secondary") and s["rmb_held"]:
+		_do_pass(b, aim, s["pass_charge"])
+		s["rmb_held"] = false
+		s["pass_charge"] = 0.0
+
+
+func _reset_shot_state(s: Dictionary, p, b) -> void:
+	s["charging"] = false
+	s["charge"] = 0.0
+	s["lmb_t"] = 0.0
+	if b:
+		b.windup = 0.0
+	if p:
+		p.speed_cap = 1.0
+		p.aim_turn_dir = Vector3.ZERO
+
+
+func _do_wrist(b, aim: Vector3) -> void:
+	b.shoot(_aim_assist(aim, 1.0), params.wrist_speed, params.wrist_lift)
+
+
+func _do_slap(b, aim: Vector3, c: float) -> void:
+	var dir := _aim_assist(aim, 1.0 - 0.5 * c)
+	var spread := deg_to_rad(lerpf(1.0, params.slap_spread, c))
+	dir = dir.rotated(Vector3.UP, randf_range(-spread, spread))
+	b.shoot(dir, lerpf(params.slap_speed_min, params.slap_speed_max, c),
+			lerpf(1.5, params.slap_lift_max, c))
+
+
+func _do_pass(b, aim: Vector3, c: float) -> void:
+	b.shoot(aim, lerpf(params.pass_speed, params.pass_speed_max, c),
+			lerpf(0.0, params.pass_lift_max, c))
+
+
+func _aim_assist(dir: Vector3, scale: float) -> Vector3:
+	var best := dir
+	var best_dot := cos(deg_to_rad(AIM_CONE_DEG))
+	for g in _goals:
+		var to_goal: Vector3 = g.global_position - _puck.global_position
+		to_goal.y = 0.0
+		if to_goal.length() < 0.1:
+			continue
+		to_goal = to_goal.normalized()
+		var d := dir.dot(to_goal)
+		if d > best_dot:
+			best = dir.slerp(to_goal, params.aim_assist_strength * scale)
+			best_dot = d
+	return best.normalized()
+
+
+## Заряд локального игрока для HUD: у хоста — из его серверного состояния броска,
+## у клиента мираж считается в _client_tick.
+func _sync_local_hud_charge() -> void:
+	var lid := multiplayer.get_unique_id()
+	if net.is_server and _shot.has(lid):
+		charge = _shot[lid]["charge"]
+		pass_charge = _shot[lid]["pass_charge"]
+
 
 func _check_out_of_bounds() -> void:
-	# Буллит: шайба ушла за линию ворот без гола (мимо створа или за сетку)
-	# ИЛИ вылетела за борт — считаем попытку промахнутой и делаем вброс.
+	# За ворота заезжать МОЖНО (как в хоккее) — вброс только если шайба реально
+	# вылетела за борт (страховка от вылета сквозь геометрию), не за сеткой.
 	if _puck == null:
 		return
 	var px: float = _puck.global_position.x
 	var pz: float = _puck.global_position.z
-	var behind := absf(px) > _goal_x + 0.3          # зашла за линию ворот
-	var wide := absf(pz) > GOAL_HALF_W + 0.6        # мимо створа (в стороне от сетки)
-	var deep := absf(px) > _goal_x + 1.2            # заехала/укатилась за сетку
-	if behind and (wide or deep):
+	if absf(px) > params.rink_length / 2.0 + 1.5 or absf(pz) > params.rink_width / 2.0 + 1.5:
 		_round = "reset"
-		_reset_timer = 1.5
-	elif absf(px) > 28.5 or absf(pz) > params.rink_width / 2.0 + 1.0:
-		_round = "reset"                            # страховка: за бортом
 		_reset_timer = 1.0
 
 
@@ -469,9 +606,9 @@ func _make_snapshot() -> Dictionary:
 					"vel": p.velocity, "k": "f"}
 	var puck := {"pos": _puck.global_position, "vel": _puck.linear_velocity,
 			"state": 0}
-	var blade: Node = _find_blade_any()
-	if blade:
-		puck["state"] = blade.puck_state
+	var any_blade: Node = _find_blade_any()
+	if any_blade:
+		puck["state"] = any_blade.puck_state
 	return {"players": players, "puck": puck}
 
 
@@ -501,7 +638,12 @@ func _client_tick(delta: float) -> void:
 			var cam := get_node_or_null("Camera3D")
 			if cam:
 				pkt["yaw"] = cam.global_rotation.y
+			# Полевой: шлём направление прицела (от шайбы к точке камеры).
+			if mine is Player:
+				var aim := _local_aim_dir(cam)
+				pkt["aim"] = [aim.x, aim.z]
 			net.push_input(_tick, pkt)
+			_client_hud_charge(mine, delta)
 	_interp.advance(delta)
 	# Применяем интерполированные позиции к куклам (поза вратаря — сама в кукле).
 	for id in _players:
@@ -511,6 +653,49 @@ func _client_tick(delta: float) -> void:
 		p.rotation.y = ry
 	if _puck:
 		_puck.global_position = _interp.sample_vec3("puck", "pos", _puck.global_position)
+
+
+## Направление броска у клиента: от шайбы к точке на луче камеры (как _aim_dir
+## в одиночной). Прижато ко льду.
+func _local_aim_dir(cam) -> Vector3:
+	if cam == null:
+		return Vector3(0, 0, -1)
+	var fwd: Vector3 = -cam.global_transform.basis.z
+	var aim_point: Vector3 = cam.global_position + fwd * AIM_DISTANCE
+	var d: Vector3 = aim_point - _puck.global_position
+	d.y = 0.0
+	if d.length() < 0.5:
+		d = fwd
+		d.y = 0.0
+	return d.normalized()
+
+
+## Клиентский мираж заряда для HUD (реальный бросок считает сервер).
+func _client_hud_charge(mine, delta: float) -> void:
+	if not (mine is Player) or mine.is_stance or not mine.input_enabled:
+		charge = 0.0
+		pass_charge = 0.0
+		_hud_lmb_t = 0.0
+		_hud_rmb_held = false
+		return
+	var pr := params
+	if mine.input.just_pressed("gesture_primary"):
+		_hud_lmb_t = 0.0
+	if mine.input.pressed("gesture_primary"):
+		_hud_lmb_t += delta
+		charge = clampf((_hud_lmb_t - pr.wrist_tap_time) / pr.slap_charge_time, 0.0, 1.0)
+	if mine.input.just_released("gesture_primary"):
+		_hud_lmb_t = 0.0
+		charge = 0.0
+	if mine.input.just_pressed("gesture_secondary"):
+		_hud_rmb_held = true
+		_hud_rmb_t = 0.0
+	if _hud_rmb_held:
+		_hud_rmb_t += delta
+		pass_charge = clampf(_hud_rmb_t / 0.5, 0.0, 1.0)
+	if mine.input.just_released("gesture_secondary"):
+		_hud_rmb_held = false
+		pass_charge = 0.0
 
 
 func _on_snapshot(_tick_n: int, data: Dictionary) -> void:
@@ -564,6 +749,11 @@ func _spawn_puppet(id: int, kind: String) -> void:
 		if cam:
 			cam.target = p
 			cam.goalie_mode = (kind == "g")
+		if kind != "g":
+			player = p
+			blade = p.get_node_or_null("Blade")
+			if _hud_ctrl:
+				_hud_ctrl.main = self   # включаем полевой HUD, когда игрок есть
 	# На клиенте своя шайба — тоже кукла (позиция из снапшота).
 	if _puck and not _puck.freeze:
 		_puck.freeze = true
