@@ -1,0 +1,67 @@
+# Автобилд плейтеста: пуш в ветку playtest -> Windows-билд -> GitHub Release.
+# Друг получает обновление через мини-лаунчер (tools/launcher) автоматически.
+name: playtest-build
+
+on:
+  push:
+    branches: [playtest]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.7"
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # публикация релиза
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Скачать Godot и export templates
+        run: |
+          curl -fL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip
+          mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+          chmod +x godot
+          curl -fL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          unzip -q templates.tpz -d /tmp/tpl
+          mv /tmp/tpl/templates/* "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+
+      - name: Версия билда
+        run: |
+          VERSION="$(date -u +%Y%m%d-%H%M)-$(git rev-parse --short HEAD)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "$VERSION"
+
+      - name: Импорт ресурсов
+        run: ./godot --headless --path . --import || true
+
+      - name: Экспорт Windows
+        run: |
+          mkdir -p build
+          ./godot --headless --path . --export-release "Windows Desktop" build/bullit.exe
+          echo "$VERSION" > build/version.txt
+          ls -la build
+
+      - name: Аудит ввода (сеть v1) — прямой Input в игровой логике запрещён
+        run: |
+          if grep -nE "Input\.(is_action|get_action)" scripts/player.gd scripts/blade.gd scripts/goalie.gd; then
+            echo "ОШИБКА: прямой Input в игровой логике — весь ввод через InputState"; exit 1
+          fi
+          echo "аудит ввода чист"
+
+      - name: Смоук перед публикацией (headless-тесты)
+        run: ./godot --headless --path . res://scenes/SmokeTest.tscn
+
+      - name: Упаковка
+        run: cd build && zip -r ../bullit_win.zip .
+
+      - name: Публикация релиза
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: playtest-${{ env.VERSION }}
+          name: Playtest ${{ env.VERSION }}
+          files: bullit_win.zip
+          prerelease: true

@@ -1,0 +1,13 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+*.md
+# Генерируемые справочники и инструкция билдов — В репо (исключения из *.md)
+!docs/CONTROLS.md
+!docs/PARAMS.md
+!docs/BUILDS.md
+!docs/GOALIE_MODEL.md
+!docs/NETWORK.md
+!docs/QUICKSTART.md
+!CREDITS.md
+build/

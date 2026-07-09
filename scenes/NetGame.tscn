@@ -1,0 +1,11 @@
+[gd_scene load_steps=2 format=3 uid="uid://bnetgame01"]
+
+[ext_resource type="Script" path="res://scripts/net_game.gd" id="1_netgame"]
+
+[node name="NetGame" type="Node3D"]
+script = ExtResource("1_netgame")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.7, -0.5, 0.5, 0, 0.7, 0.7, -0.7, -0.5, 0.5, 0, 6, 0)
+light_energy = 0.4
+shadow_enabled = true
