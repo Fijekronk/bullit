@@ -84,6 +84,11 @@ func _ready() -> void:
 	_build_arena()
 	_build_hud()
 
+	# Захват мыши: камера вращается относительным движением мыши (как в одиночной).
+	# Без захвата курсор торчит на экране и камера не крутится.
+	if not _headless:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
 	if mode == "host":
 		if net.host(port, nick):
 			net.set_role(1, role)
@@ -430,13 +435,23 @@ func _server_tick(delta: float) -> void:
 	net.broadcast_snapshot(_tick, data, delta)
 
 
+const GOAL_HALF_W := 0.915   # половина ширины створа (GOAL_WIDTH/2)
+
 func _check_out_of_bounds() -> void:
-	# Шайба вылетела за пределы — вброс без очка (короткая пауза).
+	# Буллит: шайба ушла за линию ворот без гола (мимо створа или за сетку)
+	# ИЛИ вылетела за борт — считаем попытку промахнутой и делаем вброс.
 	if _puck == null:
 		return
-	var half_w: float = params.rink_width / 2.0 + 1.0
-	if absf(_puck.global_position.x) > _goal_x + 2.0 or absf(_puck.global_position.z) > half_w:
+	var px: float = _puck.global_position.x
+	var pz: float = _puck.global_position.z
+	var behind := absf(px) > _goal_x + 0.3          # зашла за линию ворот
+	var wide := absf(pz) > GOAL_HALF_W + 0.6        # мимо створа (в стороне от сетки)
+	var deep := absf(px) > _goal_x + 1.2            # заехала/укатилась за сетку
+	if behind and (wide or deep):
 		_round = "reset"
+		_reset_timer = 1.5
+	elif absf(px) > 28.5 or absf(pz) > params.rink_width / 2.0 + 1.0:
+		_round = "reset"                            # страховка: за бортом
 		_reset_timer = 1.0
 
 
