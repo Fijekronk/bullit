@@ -29,6 +29,10 @@ var input_enabled := true  # false = управление отдано врат�
 # Input сам; на сервере сюда пишется присланный клиентом пакет (net-слой).
 var input := InputState.new()
 var input_local := true    # true = снимать Input сам; false = ввод из сети
+# Сеть: у удалённого игрока на сервере нет своей камеры — направление WASD берём
+# из присланного yaw камеры пира, иначе управление считается от чужой камеры.
+var use_net_yaw := false
+var net_yaw := 0.0
 var wish_cached := Vector3.ZERO
 var speed_cap := 1.0  # множитель потолка скорости (замах щелчка ограничивает ход)
 var aim_turn_dir := Vector3.ZERO  # зарядка броска: корпус доворачивается сюда (ZERO = нет)
@@ -448,11 +452,7 @@ func input_dir_raw() -> Vector3:
 	var z := input.strength("move_back") - input.strength("move_forward")
 	if x == 0.0 and z == 0.0:
 		return Vector3.ZERO
-	var yaw := 0.0
-	var camera := get_viewport().get_camera_3d()
-	if camera:
-		yaw = camera.global_rotation.y
-	return Vector3(x, 0.0, z).rotated(Vector3.UP, yaw).normalized()
+	return Vector3(x, 0.0, z).rotated(Vector3.UP, _cam_yaw()).normalized()
 
 
 ## Рывок = ДВОЙНОЙ Shift (быстрое повторное нажатие sprint). Одиночное
@@ -497,11 +497,16 @@ func _wish_dir() -> Vector3:
 	var fwd := input.strength("move_forward")
 	if x == 0.0 and fwd == 0.0:
 		return Vector3.ZERO
-	var yaw := 0.0
+	return Vector3(x, 0.0, -fwd).rotated(Vector3.UP, _cam_yaw()).normalized()
+
+
+## Yaw для WASD: локально — своя камера; по сети (удалённый на сервере) — yaw
+## камеры пира из пакета (иначе управление считается от чужой камеры → инверсия).
+func _cam_yaw() -> float:
+	if use_net_yaw:
+		return net_yaw
 	var camera := get_viewport().get_camera_3d()
-	if camera:
-		yaw = camera.global_rotation.y
-	return Vector3(x, 0.0, -fwd).rotated(Vector3.UP, yaw).normalized()
+	return camera.global_rotation.y if camera else 0.0
 
 
 func _forward() -> Vector3:

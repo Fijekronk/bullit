@@ -200,6 +200,9 @@ func _make_field(id: int, side: int) -> Player:
 	p.params = params
 	# Ввод: хост-игрок снимает Input; удалённые — из сети (сервер пишет пакет).
 	p.input_local = (id == multiplayer.get_unique_id())
+	# Удалённый игрок на сервере: WASD относительно yaw камеры пира (из пакета),
+	# иначе движение считается от чужой камеры → инверсия управления.
+	p.use_net_yaw = (id != multiplayer.get_unique_id())
 	add_child(p)
 	p.global_position = Vector3(-side * 4.0, 0.0, 0.0)
 	p.rotation.y = 0.0 if side > 0 else PI
@@ -253,8 +256,8 @@ func _on_input_received(id: int, tick: int, packet: Dictionary) -> void:
 	if p == null:
 		return
 	p.input.apply_packet(packet.get("s", {}), packet.get("e", {}), packet.get("r", {}))
-	# Вратарь разворачивается по yaw камеры пира (у пира нет камеры на сервере).
-	if p is Goalie and packet.has("yaw"):
+	# Разворот/движение по yaw камеры пира (у пира нет камеры на сервере).
+	if packet.has("yaw"):
 		p.net_yaw = packet["yaw"]
 	# Полевой: прицел броска — направление из камеры пира (в пакете).
 	if p is Player and packet.has("aim"):
